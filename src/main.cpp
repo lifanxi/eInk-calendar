@@ -65,6 +65,38 @@
 #include <GxEPD2_3C.h>
 #include <GxEPD2_7C.h>
 #include <U8g2_for_Adafruit_GFX.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+// 定义服务和特征的 UUID
+#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b" // 自定义服务 UUID
+#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8" // 自定义特征 UUID
+BLECharacteristic *pCharacteristic;
+BLEServer *pServer = NULL;
+bool data_received = false;
+class MyServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* server) override {
+      Serial.println("Connected to PC!");
+  }
+
+  void onDisconnect(BLEServer* server) override {
+      Serial.println("Disconnected from PC!");
+  }
+};
+std::string content = "{}";
+class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *characteristic) override {
+      std::string value = characteristic->getValue();
+      if (value.length() > 0) {
+          data_received = true;
+          Serial.print("Received from PC: ");
+          Serial.println(value.c_str());
+          content = value;
+
+      }
+  }
+};
 
 #if defined(ESP8266)
 // select one and adapt to your mapping, can use full buffer size (full HEIGHT)
@@ -167,7 +199,8 @@
 //GxEPD2_BW<GxEPD2_371, GxEPD2_371::HEIGHT> display(GxEPD2_371(/*CS=5*/ SS, /*DC=*/ 17, /*RST=*/ 16, /*BUSY=*/ 4));
 //GxEPD2_BW<GxEPD2_420, GxEPD2_420::HEIGHT> display(GxEPD2_420(/*CS=5*/ SS, /*DC=*/ 17, /*RST=*/ 16, /*BUSY=*/ 4));
 //GxEPD2_BW<GxEPD2_583, GxEPD2_583::HEIGHT> display(GxEPD2_583(/*CS=5*/ 15, /*DC=*/ 27, /*RST=*/ 26, /*BUSY=*/ 25));
-GxEPD2_BW<GxEPD2_583_T8, GxEPD2_583_T8::HEIGHT> display(GxEPD2_583_T8(/*CS=5*/ 15, /*DC=*/27, /*RST=*/26, /*BUSY=*/25));
+// GxEPD2_BW<GxEPD2_583_T8, GxEPD2_583_T8::HEIGHT> display(GxEPD2_583_T8(/*CS=5*/ 15, /*DC=*/27, /*RST=*/26, /*BUSY=*/25));
+GxEPD2_3C<GxEPD2_750c_Z08, GxEPD2_750c_Z08::HEIGHT/2> display(GxEPD2_750c_Z08(/*CS=5*/ 5, /*DC=*/ 19, /*RST=*/ 16, /*BUSY=*/ 17)); // GDEW075Z08 800x480, GD7965
 //GxEPD2_BW<GxEPD2_750, GxEPD2_750::HEIGHT> display(GxEPD2_750(/*CS=5*/ SS, /*DC=*/ 17, /*RST=*/ 16, /*BUSY=*/ 4));
 //GxEPD2_BW<GxEPD2_750_T7, GxEPD2_750_T7::HEIGHT> display(GxEPD2_750_T7(/*CS=5*/ SS, /*DC=*/ 17, /*RST=*/ 16, /*BUSY=*/ 4)); // GDEW075T7 800x480
 // 3-color e-papers
@@ -1004,10 +1037,10 @@ void ShowWeatherContent()
 
 void ShowPage(PageContent pageContent)
 {
-  // TODO: 应该判断下咋决定是否刷新。例如距离上次请求超过多少小时再请求。
-  cw = qwAPI.GetCurrentWeather(gi.id);
-  caq = qwAPI.GetCurrentAirQuality(gi.id);
-  dws = qwAPI.GetDailyWeather(gi.id);
+  // // TODO: 应该判断下咋决定是否刷新。例如距离上次请求超过多少小时再请求。
+  // cw = qwAPI.GetCurrentWeather(gi.id);
+  // caq = qwAPI.GetCurrentAirQuality(gi.id);
+  // dws = qwAPI.GetDailyWeather(gi.id);
 
   display.setFullWindow();
   //display.clearScreen(GxEPD_WHITE); 
@@ -1018,71 +1051,135 @@ void ShowPage(PageContent pageContent)
   u8g2Fonts.setForegroundColor(GxEPD_BLACK); // apply Adafruit GFX color
   u8g2Fonts.setBackgroundColor(GxEPD_WHITE); // apply Adafruit GFX color
 
-  String iconFileSmall = "32/";
-  iconFileSmall.concat(cw.icon);
-  iconFileSmall.concat(".bmp");
-  String iconFileBig = "64/";
-  iconFileBig.concat(cw.icon);
-  iconFileBig.concat(".bmp");
-  /**
-   * @brief 先写文字
-   * 
-   */
-  display.firstPage();
-  do
-  {
-    /**
-     * @brief 头部都用一样的吧
-     * 
-     */
-    ShowPageHeader();
 
-    switch (pageContent)
-    {
-    case PageContent::CALENDAR:
-
-      ShowCurrentDate();
-      break;
-    case PageContent::WEATHER:
-      ShowWeatherContent();
-      break;
-    }
-
-    // ShowToxicSoul();
-    //ShowPoems(440);
-    ShowHitokoto(440);
-    // ShowTodayInHistory(410);
-    //ShowTodoist(500);
-    ShowWeatherFoot();
-
-  } while (display.nextPage());
-
-  /**
-   * @brief 貌似没法让u8g2和平共处，所以只能先输出文字再输出需要显示的图片，导致整体刷新时间太长。
-   * 
-   */
-  switch (pageContent)
-  {
-  case PageContent::CALENDAR:
-    if (caq.category.length() >= 12){
-      drawBitmapFromSpiffs_Buffered(iconFileSmall.c_str(), 30, DISPLAY_HEIGHT - 48, false, true, false);
-    }
-    else{
-      drawBitmapFromSpiffs_Buffered(iconFileSmall.c_str(), 48, DISPLAY_HEIGHT - 48, false, true, false);
-    }
-
-    break;
-  case PageContent::WEATHER:
-    if (caq.category.length() >= 12){
-      drawBitmapFromSpiffs_Buffered(iconFileSmall.c_str(), 30, DISPLAY_HEIGHT - 48, false, true, false);
-    }
-    else{
-      drawBitmapFromSpiffs_Buffered(iconFileSmall.c_str(), 48, DISPLAY_HEIGHT - 48, false, true, false);
-    }
-    drawBitmapFromSpiffs_Buffered(iconFileBig.c_str(), 88, 140, false, true, false);
-    break;
+  DynamicJsonDocument doc(2048);
+  DeserializationError error = deserializeJson(doc, content);
+  if (error) {
+    Serial.print("deserialze ble content failed: ");
+    Serial.println(error.c_str());
+    return;
   }
+  Serial.println("begin dispaly");
+
+  String datetime = doc["datetime"].as<String>();
+
+  Serial.println(datetime.c_str());
+  display.firstPage();
+  do {
+  u8g2Fonts.setFont(u8g2_mfyuanhei_16_gb2312);
+  u8g2Fonts.drawUTF8(48, 64, datetime.c_str());
+  }while (display.nextPage());
+  // int16_t cityNameWidth = u8g2Fonts.getUTF8Width(gi.name.c_str());
+  // u8g2Fonts.drawUTF8((DISPLAY_WIDTH - cityNameWidth - 48), 64, gi.name.c_str());
+
+  // u8g2Fonts.setFont(u8g2_mfyuehei_14_gb2312);
+  // u8g2Fonts.drawUTF8(48, 64 + 24, WEEKDAY_EN[DateTime.getParts().getWeekDay()]);
+
+  // String iconFileSmall = "32/";
+  // iconFileSmall.concat(cw.icon);
+  // iconFileSmall.concat(".bmp");
+  // String iconFileBig = "64/";
+  // iconFileBig.concat(cw.icon);
+  // iconFileBig.concat(".bmp");
+  // /**
+  //  * @brief 先写文字
+  //  * 
+  //  */
+  // display.firstPage();
+  // do
+  // {
+  //   /**
+  //    * @brief 头部都用一样的吧
+  //    * 
+  //    */
+  //   ShowPageHeader();
+
+  //   switch (pageContent)
+  //   {
+  //   case PageContent::CALENDAR:
+
+  //     ShowCurrentDate();
+  //     break;
+  //   case PageContent::WEATHER:
+  //     ShowWeatherContent();
+  //     break;
+  //   }
+
+  //   // ShowToxicSoul();
+  //   //ShowPoems(440);
+  //   ShowHitokoto(440);
+  //   // ShowTodayInHistory(410);
+  //   //ShowTodoist(500);
+  //   ShowWeatherFoot();
+
+  // } while (display.nextPage());
+
+  // /**
+  //  * @brief 貌似没法让u8g2和平共处，所以只能先输出文字再输出需要显示的图片，导致整体刷新时间太长。
+  //  * 
+  //  */
+  // switch (pageContent)
+  // {
+  // case PageContent::CALENDAR:
+  //   if (caq.category.length() >= 12){
+  //     drawBitmapFromSpiffs_Buffered(iconFileSmall.c_str(), 30, DISPLAY_HEIGHT - 48, false, true, false);
+  //   }
+  //   else{
+  //     drawBitmapFromSpiffs_Buffered(iconFileSmall.c_str(), 48, DISPLAY_HEIGHT - 48, false, true, false);
+  //   }
+
+  //   break;
+  // case PageContent::WEATHER:
+  //   if (caq.category.length() >= 12){
+  //     drawBitmapFromSpiffs_Buffered(iconFileSmall.c_str(), 30, DISPLAY_HEIGHT - 48, false, true, false);
+  //   }
+  //   else{
+  //     drawBitmapFromSpiffs_Buffered(iconFileSmall.c_str(), 48, DISPLAY_HEIGHT - 48, false, true, false);
+  //   }
+  //   drawBitmapFromSpiffs_Buffered(iconFileBig.c_str(), 88, 140, false, true, false);
+  //   break;
+  // }
 }
+wl_status_t startWiFi(int &wifiRSSI)
+{
+  const char * WIFI_SSID="LINKSYS123";
+  const char * WIFI_PASSWORD = "Abcd1234..";
+  WiFi.mode(WIFI_STA);
+  Serial.printf("%s '%s'", "Connecting to", WIFI_SSID);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  // timeout if WiFi does not connect in WIFI_TIMEOUT ms from now
+  unsigned long timeout = millis() + 10000;
+  wl_status_t connection_status = WiFi.status();
+
+  while ((connection_status != WL_CONNECTED) && (millis() < timeout))
+  {
+    Serial.print(".");
+    delay(50);
+    connection_status = WiFi.status();
+  }
+  Serial.println();
+
+  if (connection_status == WL_CONNECTED)
+  {
+    wifiRSSI = WiFi.RSSI(); // get WiFi signal strength now, because the WiFi
+                            // will be turned off to save power!
+    Serial.println("IP: " + WiFi.localIP().toString());
+  }
+  else
+  {
+    Serial.printf("%s '%s'\n", "Not connected to", WIFI_SSID);
+  }
+  return connection_status;
+} // startWiFi
+
+/* Disconnect and power-off WiFi.
+ */
+void killWiFi()
+{
+  WiFi.disconnect();
+  WiFi.mode(WIFI_OFF);
+} // killWiFi
 
 void setup()
 {
@@ -1091,11 +1188,18 @@ void setup()
   Serial.println();
   Serial.println("setup");
 
+  esp_bt_controller_disable();
+  esp_wifi_stop();
+  esp_sleep_enable_timer_wakeup((uint64_t)3600* uS_TO_S_FACTOR);
+  Serial.println("Setup ESP32 to sleep for every " + String(TIME_TO_SLEEP) + " Seconds");
+  esp_deep_sleep_start();
+
+  data_received = false;
   //Print the wakeup reason for ESP32
   print_wakeup_reason();
 
-  SPI.end();
-  SPI.begin(13, 12, 14, 15);
+  //SPI.end();
+  SPI.begin(18, 19, 23, 5);
 
   // Initialise SPIFFS
   if (!SPIFFS.begin())
@@ -1106,6 +1210,30 @@ void setup()
   }
   Serial.println("\r\nSPIFFS Initialisation done.");
 
+  
+  BLEDevice::init("ESP32_BLE_Server");
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+  // 创建服务
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+
+  // 创建特征（用于接收 PC 发送的数据）
+  pCharacteristic = pService->createCharacteristic(
+      CHARACTERISTIC_UUID,
+      BLECharacteristic::PROPERTY_WRITE
+  );
+  pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
+  pCharacteristic->addDescriptor(new BLE2902());
+
+  // 启动服务
+  pService->start();
+
+  // 启动广告（初始不启动，由定时器控制）
+  BLEAdvertising *pAdvertising = pServer->getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pServer->getAdvertising()->start();
+    Serial.println("Advertising started...");
+        
   display.init();
   display.setRotation(3);
   DISPLAY_WIDTH = display.width();
@@ -1117,23 +1245,50 @@ void setup()
   u8g2Fonts.setForegroundColor(GxEPD_BLACK); // apply Adafruit GFX color
   u8g2Fonts.setBackgroundColor(GxEPD_WHITE); // apply Adafruit GFX color
 
-  SmartConfigManager scm;
-  scm.initWiFi(ShowWiFiSmartConfig);
+  // int wifiRSSI = 0; // “Received Signal Strength Indicator"
+  // wl_status_t wifiStatus = startWiFi(wifiRSSI);
+  // if (wifiStatus != WL_CONNECTED) { // WiFi Connection Failed
+  //   killWiFi();
+  //   Serial.printf("wifi connetion failed");
+  //   esp_restart();
+  // }
 
-  qwAPI.Config(QWEATHER_API_KEY);
+  // SmartConfigManager scm;
+  // scm.initWiFi(ShowWiFiSmartConfig);
 
-  IPAPIResponse ipAPIResponse = GetIPInfomation();
-  if(ipAPIResponse.status != "success"){
-    Serial.printf("Get ip information failed:%s\n Restarting......\n",ipAPIResponse.message);
-    esp_restart();
+  // qwAPI.Config(QWEATHER_API_KEY);
+
+  // IPAPIResponse ipAPIResponse = GetIPInfomation();
+  // if(ipAPIResponse.status != "success"){
+  //   Serial.printf("Get ip information failed:%s\n Restarting......\n",ipAPIResponse.message);
+  //   esp_restart();
+  // }
+  // Serial.printf("IP: %s\n", ipAPIResponse.query.c_str());
+  // Serial.printf("City: %s\n", ipAPIResponse.city.c_str());
+
+  // gi = qwAPI.GetGeoInfo(ipAPIResponse.city, ipAPIResponse.regionName);
+  // Serial.printf("从和风天气中取到匹配城市: %s\n", gi.name.c_str());
+
+  // setupDateTime();
+
+  // ++LASTPAGE;
+  // if (LASTPAGE > PageContent::WEATHER)
+  //   LASTPAGE = PageContent::CALENDAR;
+
+  // ShowPage((PageContent)LASTPAGE);
+  // display.hibernate();
+
+  
+  /**
+   * @brief 关掉蓝牙和WiFi,进入Deep sleep模式
+   * 
+   */
+  while (!data_received) {
+    delay(1000);
   }
-  Serial.printf("IP: %s\n", ipAPIResponse.query.c_str());
-  Serial.printf("City: %s\n", ipAPIResponse.city.c_str());
-
-  gi = qwAPI.GetGeoInfo(ipAPIResponse.city, ipAPIResponse.regionName);
-  Serial.printf("从和风天气中取到匹配城市: %s\n", gi.name.c_str());
-
-  setupDateTime();
+  pServer->getAdvertising()->stop();
+  Serial.println("Advertising stopped.");
+  taskYIELD();
 
   ++LASTPAGE;
   if (LASTPAGE > PageContent::WEATHER)
@@ -1146,13 +1301,10 @@ void setup()
   Serial.println("睡吧。。。睡吧。。。zzzzzZZZZZZZ~~ ~~ ~~");
   Serial.flush();
 
-  /**
-   * @brief 关掉蓝牙和WiFi,进入Deep sleep模式
-   * 
-   */
+  
   esp_bt_controller_disable();
   esp_wifi_stop();
-  esp_sleep_enable_timer_wakeup((uint64_t)TIME_TO_SLEEP * uS_TO_S_FACTOR);
+  esp_sleep_enable_timer_wakeup((uint64_t)30* uS_TO_S_FACTOR);
   Serial.println("Setup ESP32 to sleep for every " + String(TIME_TO_SLEEP) + " Seconds");
   esp_deep_sleep_start();
 }
